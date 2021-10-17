@@ -1,0 +1,178 @@
+<html>
+    <head>
+        <title>Air Quality Index</title>
+        <meta http-equiv="Content-Type"content="text/html; charset-utf-8">
+        <script src="https://d3js.org/d3.v7.min.js"></script>        
+        <script src="https://cdn.jsdelivr.net/npm/d3-fetch@3"></script>      
+        <link rel="stylesheet" href="https://unpkg.com/leaflet@1.6.0/dist/leaflet.css"
+            integrity="sha512-xwE/Az9zrjBIphAcBb3F6JVqxf46+CDLwfLMHloNu6KEQCAWi6HcDUbeOfBIptF7tcCzusKFjFw2yuvEpDL9wQ=="
+            crossorigin=""/>
+        <script src="https://unpkg.com/leaflet@1.6.0/dist/leaflet.js"
+            integrity="sha512-gZwIG9x3wUXg2hdXF6+rVkLF/0Vi9U8D2Ntg4Ga5I5BZpVkVxlJWbSQtXPSiUTtC0TjtGOmxa1AJPuV0CPthew=="
+            crossorigin=""></script>
+        <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
+        <script src="js/FileSaver.min.js"></script> <!-- defines saveas-->
+        <script src="js/html-to-image.js"></script>        
+    </head>
+    <body>
+        <script> 
+
+var map;
+var data = [];
+
+// Air Quality Index (AQI) categories
+moderate = {name: 'Moderate', lbound: 50, ubound: 100, color: 'tan'}; //epa color: yellow
+unhealthy1 = {name: 'Unhealthy for Sensitive Groups', lbound: 100, ubound: 150, color: 'indianred'}; //epa color: orange
+unhealthy2 = {name: 'Unhealthy', lbound: 150, ubound: 200, color: 'firebrick'}; //epa color: red
+unhealthy3 = {name: 'Very Unhealthy', lbound: 200, ubound: 300, color: 'orangered'}; //epa color: purple
+hazardous = {name: 'Hazardous', lbound: 300, ubound: Number.POSITIVE_INFINITY, color: 'fuchsia'}; //epa color: maroon
+
+aqiCat = [moderate, unhealthy1, unhealthy2, unhealthy3, hazardous]
+
+function aqiColor(aqi) {
+    for (let cat of aqiCat)
+        if (cat.lbound < aqi && aqi <= cat.ubound) return(cat.color);
+}
+
+Number.prototype.zfill = function(width) {
+    let s = String(this);
+    while (s.length < (width || 2)) {s = "0" + s;}
+    return s;
+}
+
+Date.prototype.addDays = function(days) {
+    let date = new Date(this.valueOf());
+    date.setDate(date.getDate() + days);
+    return date;
+}
+
+Date.prototype.isSameDay = function(date) {
+    return this.getDate() === date.getDate() &&
+        this.getMonth() === date.getMonth() &&
+        this.getFullYear() === date.getFullYear();
+}
+
+toDate = function(dateStr) {  // format of dateStr: yyyy-mm-dd
+    if (dateStr == null) return null;
+    let parts = dateStr.split('-');
+    return new Date(parts[0], parts[1] - 1, parts[2]); //months 0-indexed
+}
+
+var height = 540;
+var width = 16.0*height/9;  // 16:9 aspect ratio
+
+async function plot() {
+    d3.csv('2019_daily_aqi_over_50.csv').then(data => {
+        for (let row of data) {
+            row['date_local'] = toDate(row['date_local']);
+        }
+
+        data.sort((a,b) => { //partitioned sort, so more points with higher AQI plotted last
+            aDate = a['date_local'];
+            bDate = b['date_local'];
+            if (aDate == null || bDate == null) return null;
+            if (aDate.isSameDay(bDate))
+                return a['aqi'] - b['aqi'];  //method: if a should be before b, return val < 0
+            else if (aDate < bDate)
+                return -1;
+            else if (aDate > bDate)
+                return 1;
+        });  
+
+        const startDate = new Date(2019, 0, 1); 
+        var frame_index = -1;
+        async function next() {
+            await new Promise(resolve => setTimeout(resolve, 1000)); 
+            frame_index++;
+            var curDate = startDate.addDays(frame_index); 
+
+            if (frame_index < 365) {
+                var mapPromise = new Promise((resolve, reject) => {                
+                    const mapElement = document.createElement("div");
+                    mapElement.setAttribute("id", "mapdiv");
+                    mapElement.style.width = `${width}px`;
+                    mapElement.style.height = `${height}px`;
+                    document.body.appendChild(mapElement);
+                    var map = L.map(mapElement).setView([37.0, -102.0], 4);
+                    map.removeControl(map.zoomControl);
+                    map.removeControl(map.attributionControl);
+                    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png').addTo(map);
+
+                    // Add air quality markers 
+                    for (let datum of data) {
+                        if (datum['latitude'] < 24.396308 || datum['latitude'] > 49.384358 ||
+                            datum['longitude'] < -124.848974 || datum['longitude'] > -66.885444) {
+                                continue;  //point is outside of continental US
+                            }
+                        let datumDate = datum['date_local']
+                        if (datumDate > curDate) {
+                            break; // date column is sorted, so end search for matching date
+                        } else if (datumDate.isSameDay(curDate)) {
+                            var col = aqiColor(datum['aqi']);
+                            L.circle([datum['latitude'], datum['longitude']], { //draw marker
+                                color: col,
+                                fillColor: col,
+                                fillOpacity: 0.8,
+                                radius: 40000,
+                                fill: true,
+                                weight: 2
+                            }).addTo(map);
+                        }
+                    }
+
+                    // Add legend
+                    var legend = L.control({position: 'topleft'});
+                    legend.onAdd = function () {
+                        var div = L.DomUtil.create('div', 'info legend');
+                        var html = '<style> .paddedcell td {padding-top:4px; padding-bottom:4px; padding-right:6px; padding-left:6px} </style>'
+                            + '<table class="paddedcell" style="width:270px;font-size:12px;background-color:#ffffff;">'
+                            + '<tr><td colspan="100%" style="text-align:center;"><u>Air Quality Index</u></td></tr>';
+                        for (var i = 0; i < aqiCat.length; i++) {
+                            html +=
+                                '<tr>'
+                                    + '<td style="background-color: ' + aqiCat[i].color + ';width:7px;"></td>'
+                                    + '<td>  ' + aqiCat[i].lbound + (aqiCat[i].ubound == Number.POSITIVE_INFINITY ? '+' : ' &ndash; ' + aqiCat[i].ubound) + ',  ' + aqiCat[i].name + '  </td>'
+                                    + '</tr>';
+                        }
+                        html += '</table>'
+                        div.innerHTML += html  //HTML automatically transformed when added to div.innerHTML, hence use of separate var to build html string
+                        return div;
+                    };
+                    legend.addTo(map);
+
+
+                    // Add date annotation
+                    var displayDate = curDate.toLocaleDateString("en-US", {year: 'numeric', month: 'long', day: 'numeric'}).toString().replace(/\s/g,'&nbsp;'); //replace spaces with non-breaking spaces
+                    var dateIcon = L.divIcon({
+                        className: 'date-div-icon',
+                        html: `<div class="date-div-icon" style="font-size:20px">${displayDate}</div>`
+                    });
+                    L.marker([33.0, -135.15], {icon: dateIcon}).addTo(map);
+
+                    resolve(mapElement);
+                }); //mapPromise
+
+                // Save as png
+                mapPromise.then(async (mapElement) => { 
+                    await new Promise(resolve => setTimeout(resolve, 1000)); //Otherwise canvas will be drawn before tile layer has loaded
+                    htmlToImage.toPng(document.body)
+                        .then(function (dataUrl) {
+                        saveAs(dataUrl, 'out/daily_aqi_' + frame_index.zfill(3) + '.png');
+                    });
+                    document.body.removeChild(mapElement);
+                }).then(() => next());
+            } //if frame_index 
+        } //next
+
+        next();
+
+    });// d3.csv.then()
+
+} //plot()
+
+plot();
+
+        </script>
+    </body>
+</html>
+

@@ -1,0 +1,183 @@
+<html>
+    <head>
+        <title>Physical/Cognitive Impairment by County 2015-2019</title>
+        <meta http-equiv="Content-Type"content="text/html; charset-utf-8">
+        <script src="https://d3js.org/d3.v7.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/d3-array@3"></script>
+        <script src="https://cdn.jsdelivr.net/npm/d3-geo@3"></script>  
+        <script src="https://cdn.jsdelivr.net/npm/d3-fetch@3"></script>
+        <script src="https://d3js.org/d3-collection.v1.min.js"></script>
+        <script src="https://d3js.org/topojson.v1.min.js"></script>
+        <script src="js/FileSaver.min.js"></script> <!--defines saveas-->
+        <script src="js/html-to-image.js"></script>        
+        <script src="js/wicket.js"></script> <!--defines wicket obj to convert wkt to json-->        
+    </head>
+    <style>
+
+body {
+  font-family: Arial, sans-serif;
+}
+
+.legend {
+  font-size: 16px;
+}
+
+div.tooltip {   
+  position: absolute;           
+  text-align: center;                          
+  padding: 2px;             
+  font-size: 16px;     
+  background: #FFFFFF;
+  border: 1px;      
+  border-radius: 8px;           
+  pointer-events: none;         
+}        
+    </style>
+
+    <body>
+        <svg></svg>
+        <script>
+var w = window.innerWidth;
+var h = window.innerHeight;
+
+const svg = d3.select('svg')
+    .attr('width', w)
+    .attr('height', h);
+
+const g = svg.append('g');
+
+var div = d3.select("body").append("div")   
+    .attr("class", "tooltip")               
+    .style("opacity", 0);
+
+svg.call(
+    d3.zoom().on('zoom', (event) => {
+        g.attr('transform', event.transform);
+    })
+);
+
+(async () => { 
+    // Read CSV data
+    var dataPromise = d3.csv('disability_national_5yr_2019_bycounty.csv').then( data => {
+        var wkt = new Wkt.Wkt();
+        data.forEach( (d) => {
+            wkt.read(d['c15_geom_wkt']);
+            d['polygon_geoj'] = wkt.toJson();
+        });
+        return data;
+    });
+    
+    var data = await dataPromise;
+
+    // Initialize geoJson 
+    var geoj = {
+        "type": "FeatureCollection",
+        "features": []
+    }
+
+    // Add counties to geojson
+    for (let datum of data) {  //for each polygon
+        // Append to geojson object
+        geoj.features.push( {
+            "type": "Feature",
+            "properties": {
+                "geoid": datum['c15_full_geoid'],
+                "name" : datum['c15_display_name'],
+                "perc" : parseFloat(datum['perc_18to64_disab'])    
+            },
+            "geometry": datum['polygon_geoj']    
+        });
+    }
+
+    var projection = d3.geoMercator()
+        .scale(1000)
+        .translate([2250, 1100]);
+    var pathGenerator = d3.geoPath().projection(projection);
+
+    // Set color scale
+    var color_domain = [0, 10, 20, 30, 40];
+    var legend_labels = ['0 - 10%', '10 - 20%', '20 - 30%', '30 - 40%','> 40%'];    
+    var colors = ['#fef0d9','#fdcc8a','#fc8d59','#e34a33','#b30000'];
+    var color = d3.scaleThreshold()
+        .domain(color_domain)
+        .range(colors);
+
+    const format = d3.format(".1f");  
+
+    // Draw counties
+    g.selectAll('path.counties')
+        .attr('class', 'counties')
+        .data(geoj.features)
+        .enter()
+        .append('path')
+        .attr('d', pathGenerator)
+        .attr('fill', (d) => color(d.properties['perc']))
+        .on('mouseover', (event, d) => {
+            const[x, y] = d3.pointer(event);
+            div.transition()
+                .style("opacity", 1)            
+            div.html(d.properties["name"] + " </br> " + format(d.properties["perc"]) + "%")
+                .style("left", (x) + "px")
+                .style("top", (y-30) + "px");
+            }
+        )
+        .on("mouseout", () => {
+            div.transition()
+                .style("opacity", 0);
+            }
+        );
+
+    var title = svg.append('text')
+        .attr("class", "title")
+        .attr("x", w/2)
+        .attr("y", 45)
+        .attr("text-anchor", "middle")
+        .html("Percent 18- to 64-Year-Olds with Physical or Cognitive Impairment")
+        .style("font-size", "24px");
+
+    var subtitle = svg.append('text')
+        .attr("class", "subtitle")
+        .attr("x", w/2)
+        .attr("y", 80)
+        .attr("text-anchor", "middle")
+        .html("Survey Period:  2015 - 2019")
+        .style("font-size", "22px");
+
+    // Add legend
+    var legend = svg.selectAll("g.legend")
+        .data(color_domain)
+        .enter().append("g")
+        .attr("class", "legend");
+
+    var ls_w = 20, ls_h = 20;
+    legend_y_offset = 650;
+    legend_x_offset = 60;
+    vspace = 4;
+    legend.append("rect")
+        .attr("x", legend_x_offset)
+        .attr("y", function(d, i){ return legend_y_offset - (i*ls_h) - 2*ls_h - i*vspace;})
+        .attr("width", ls_w)
+        .attr("height", ls_h)
+        .style("fill", function(d, i) { return colors[i]; })
+        .style("opacity", 1);
+
+    legend.append("text")
+        .attr("x", legend_x_offset + ls_w + 15)
+        .attr("y", function(d, i){ return legend_y_offset - (i*ls_h) - ls_h - 6 - i*vspace})
+        .text(function(d, i){ return legend_labels[i] });
+
+    // Draw state outlies
+    var omitted = d3.set(['02', '15', '72']); //plot continental US only
+    const us = await d3.json("https://cdn.jsdelivr.net/npm/us-atlas@3/states-10m.json");
+    us.objects.states.geometries = us.objects.states.geometries.filter(function(d) { return(!omitted.has(d.id)); })
+    svg.append("path")
+        .attr("class", "states")
+        .datum(topojson.feature(us, us.objects.states))
+        .attr("d", pathGenerator)
+        .style("stroke", "black")
+        .style("fill", "none");
+})();    
+        </script>
+    </body>
+</html>
+
