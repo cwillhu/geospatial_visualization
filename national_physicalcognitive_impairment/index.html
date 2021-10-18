@@ -166,7 +166,7 @@ svg.call(
         .attr("y", function(d, i){ return legend_y_offset - (i*ls_h) - ls_h - 6 - i*vspace})
         .text(function(d, i){ return legend_labels[i] });
 
-    // Draw state outlies
+    // Draw state outlines
     var omitted = d3.set(['02', '15', '72']); //plot continental US only
     const us = await d3.json("https://cdn.jsdelivr.net/npm/us-atlas@3/states-10m.json");
     us.objects.states.geometries = us.objects.states.geometries.filter(function(d) { return(!omitted.has(d.id)); })
