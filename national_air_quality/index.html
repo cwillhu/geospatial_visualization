@@ -67,7 +67,7 @@ async function plot() {
             row['date_local'] = toDate(row['date_local']);
         }
 
-        data.sort((a,b) => { //partitioned sort, so more points with higher AQI plotted last
+        data.sort((a,b) => { //partitioned sort, so points with higher AQI plotted last (i.e., on top)
             aDate = a['date_local'];
             bDate = b['date_local'];
             if (aDate == null || bDate == null) return null;
